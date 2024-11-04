@@ -28,7 +28,8 @@ struct recycler *recycler_create(size_t block_size, size_t total_size)
     while (idx < recy->capacity)
     {
         void *tmp2 = fl;
-        char *nextBlock = tmp2 + block_size;
+        char *nextBlock = tmp2;
+        char *nextBlock += block_size;
         void *tmp3 = nextBlock;
         traveler = tmp3;
         traveler->next = NULL;

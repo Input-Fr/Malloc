@@ -53,8 +53,6 @@ void *recycler_allocate(struct recycler *r)
     }
     struct free_list *fl = r->free;
     r->free = fl->next;
-    char *flChar = fl;
-    void *newBlock = flChar + sizeof(struct free_list *);
     return r->free;
 }
 
@@ -64,16 +62,7 @@ void recycler_free(struct recycler *r, void *block)
     {
         return;
     }
-    char *ptrToMeta = block - sizeof(struct free_list *);
-    struct free_list *fl = ptrToMeta;
+    struct free_list *fl = block;
     fl->next = r->free;
     r->free = fl;
 }
-
-
-
-
-
-
-
-

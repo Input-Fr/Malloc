@@ -1,4 +1,6 @@
-#include "my_recycler.h"
+#include <stdlib.h>
+
+#include "recycler.h"
 
 struct recycler *recycler_create(size_t block_size, size_t total_size)
 {

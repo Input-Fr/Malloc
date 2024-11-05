@@ -59,7 +59,7 @@ void *recycler_allocate(struct recycler *r)
     }
     struct free_list *fl = r->free;
     r->free = fl->next;
-    return r->free;
+    return fl;
 }
 
 void recycler_free(struct recycler *r, void *block)

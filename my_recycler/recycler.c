@@ -11,6 +11,7 @@ struct recycler *recycler_create(size_t block_size, size_t total_size)
     struct recycler *recy = malloc(sizeof(struct recycler));
     if (total_size % block_size != 0 || !recy)
     {
+        free(recy);
         return NULL;
     }
     recy->capacity = total_size / block_size;
@@ -54,7 +55,7 @@ void *recycler_allocate(struct recycler *r)
 {
     if (!r || !r->free)
     {
-        return r;
+        return NULL;
     }
     struct free_list *fl = r->free;
     r->free = fl->next;

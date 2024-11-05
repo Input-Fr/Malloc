@@ -6,5 +6,7 @@ void *page_begin(void *ptr, size_t page_size)
     {
         return NULL;
     }
-    return (void *)((size_t)(ptr) & ~(page_size - 1));
+    size_t res = ((size_t)(ptr) & (~(page_size - 1)));
+    void *bordel = (void *)res;
+    return bordel;
 }

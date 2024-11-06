@@ -1,0 +1,236 @@
+#define _GNU_SOURCE
+
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/mman.h>
+
+#include "align.h"
+
+struct block
+{
+    size_t curBlockSize;
+    size_t remainingSize;
+    void *ptrToPage;
+};
+
+struct metaBlock
+{
+    unsigned int status : 1; // 1-bit field : 0 = used, 1 = free
+    size_t blockSize;
+    struct metaBlock *next;
+    struct metaBlock *prev;
+};
+
+struct block b = { .curBlockSize = 0, .remainingSize = 0, .ptrToPage = NULL };
+
+static struct metaBlock *findMemSpace(size_t wSize, struct metaBlock **traveler)
+{
+    struct metaBlock *wantedBlock = NULL;
+    size_t curSize = 0;
+    curSize--;
+    while ((*traveler)->next)
+    {
+        if ((*traveler)->status)
+        {
+            if ((*traveler)->blockSize >= wSize)
+            {
+                wantedBlock = curSize > wSize ? (*traveler) : wantedBlock;
+                curSize = curSize > wSize ? wSize : curSize;
+            }
+        }
+        (*traveler) = (*traveler)->next;
+    }
+    // check if last is correct
+    if ((*traveler)->status)
+    {
+        if ((*traveler)->blockSize >= wSize)
+        {
+            wantedBlock = curSize > wSize ? (*traveler) : wantedBlock;
+            curSize = curSize > wSize ? wSize : curSize;
+        }
+    }
+    return wantedBlock;
+}
+
+static char *newMetaBlock(struct metaBlock *traveler, size_t size)
+{
+    void *interPtr = traveler;
+    char *tmpPtr = interPtr;
+    tmpPtr += traveler->blockSize + sizeof(struct metaBlock);
+    interPtr = tmpPtr;
+    struct metaBlock *mB = interPtr;
+    mB->status = 0;
+    mB->blockSize = size;
+    mB->next = NULL;
+    mB->prev = traveler;
+    traveler->next = mB;
+    return tmpPtr;
+}
+
+static char *createFirstBlock(void *addr, size_t alignedSize, size_t size)
+{
+    b.ptrToPage = addr;
+    b.curBlockSize = alignedSize;
+    b.remainingSize = alignedSize - (size + sizeof(struct metaBlock));
+    struct metaBlock *mB = b.ptrToPage;
+    mB->status = 0; // used
+    mB->blockSize = size;
+    void *interPtr = mB; // cast to void so we can cast to char
+    char *tmpPtr = interPtr; // cast to char so we can increment
+    mB->next = NULL; // last elt, no next
+    mB->prev = NULL; // firstBlock nothing before
+    return tmpPtr;
+}
+
+static void splitSpace(struct metaBlock **mB, size_t size)
+{
+    if ((*mB)->blockSize
+        > size + sizeof(struct metaBlock)) // if space is too big
+    {
+        void *interPtr = (*mB);
+        char *beginNewPtr = interPtr;
+        beginNewPtr += size + sizeof(struct metaBlock);
+        interPtr = beginNewPtr;
+        struct metaBlock *nmB = interPtr;
+        nmB->status = 1;
+        nmB->blockSize = (*mB)->blockSize - (size + sizeof(struct metaBlock));
+        nmB->next = (*mB)->next;
+        nmB->prev = (*mB);
+        if ((*mB)->next)
+        {
+            (*mB)->next->prev = nmB;
+        }
+        (*mB)->next = nmB;
+        (*mB)->blockSize = size;
+    }
+}
+
+static void reallocBlock(size_t size)
+{
+    size_t newSize = align(b.curBlockSize + size + sizeof(struct metaBlock));
+    b.remainingSize += (newSize - b.curBlockSize);
+    b.ptrToPage = mremap(b.ptrToPage, b.curBlockSize, newSize, MREMAP_MAYMOVE);
+    b.curBlockSize = newSize;
+}
+
+__attribute__((visibility("default"))) void *malloc(size_t size)
+{
+    if (PTRDIFF_MAX < size)
+    {
+        return NULL;
+    }
+    if (b.ptrToPage == NULL)
+    {
+        size_t alignedSize = align(size + sizeof(struct metaBlock));
+        if (!alignedSize)
+        {
+            return NULL;
+        }
+        void *addr = mmap(NULL, alignedSize, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+        if (addr == MAP_FAILED)
+        {
+            return NULL;
+        }
+        char *tmpPtr = createFirstBlock(addr, alignedSize, size);
+        return tmpPtr + sizeof(struct metaBlock);
+    }
+    else
+    {
+        struct metaBlock *traveler = b.ptrToPage;
+        struct metaBlock *mBfind = findMemSpace(size, &traveler);
+        if (!mBfind) // no free, create new one
+        {
+            if (b.remainingSize < size + sizeof(struct metaBlock))
+            { // if not enough space, "realloc"
+                reallocBlock(size);
+                if (b.ptrToPage == MAP_FAILED)
+                {
+                    return NULL;
+                }
+            }
+            b.remainingSize -= (size + sizeof(struct metaBlock));
+            char *tmpPtr = newMetaBlock(traveler, size);
+            return tmpPtr + sizeof(struct metaBlock);
+        }
+        else // one large enough memory was found
+        {
+            splitSpace(&mBfind,
+                       size); // improvement : split when free space too big
+            mBfind->status = 0;
+            void *interPtr = mBfind;
+            char *tmpPtr = interPtr;
+            return tmpPtr + sizeof(struct metaBlock);
+        }
+    }
+}
+/*
+#include <stdio.h>
+
+__attribute__((visibility("default"))) void print(void)
+{
+    printf("MAIN BLOCK : b.curBlockSize = %zu\n b.remainingSize = %zu\n",
+b.curBlockSize, b.remainingSize); struct metaBlock *mB = b.ptrToPage; while (mB)
+    {
+        printf("META BLOCK : status = %d\n blockSize = %zu\n\n", mB->status,
+mB->blockSize); mB = mB->next;
+    }
+
+}
+*/
+void mergeFree(struct metaBlock *mB)
+{
+    if (mB->next && mB->next->status)
+    {
+        mB->blockSize += mB->next->blockSize + sizeof(struct metaBlock);
+        if (mB->next->next)
+        {
+            mB->next->next->prev = mB;
+        }
+        mB->next = mB->next->next;
+    }
+    if (mB->prev && mB->prev->status)
+    {
+        struct metaBlock *mBn = mB->prev;
+        mBn->blockSize += mBn->next->blockSize + sizeof(struct metaBlock);
+        if (mBn->next->next)
+        {
+            mBn->next->next->prev = mBn;
+        }
+        mBn->next = mBn->next->next;
+    }
+}
+
+__attribute__((visibility("default"))) void free(void *ptr)
+{
+    if (!ptr)
+    {
+        return;
+    }
+
+    char *tmpPtr = ptr;
+    tmpPtr -= sizeof(struct metaBlock);
+    void *interPtr = tmpPtr;
+    struct metaBlock *mB = interPtr;
+    mB->status = 1;
+    mergeFree(mB); // improvement : merge if two neighbors are free
+    struct metaBlock *checkEmpty = b.ptrToPage;
+    if (!checkEmpty->next) // no more allocated memory
+    {
+        munmap(b.ptrToPage, b.curBlockSize);
+        b.ptrToPage = NULL;
+        b.curBlockSize = 0;
+        b.remainingSize = 0;
+    }
+}
+
+__attribute__((visibility("default"))) void *realloc(void *ptr, size_t size)
+{
+    return ptr || size ? NULL : NULL;
+}
+
+__attribute__((visibility("default"))) void *calloc(size_t nmemb, size_t size)
+{
+    return nmemb || size ? NULL : NULL;
+}

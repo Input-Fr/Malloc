@@ -156,6 +156,15 @@ size_t align16(size_t size)
     }
 }
 
+char *foundMem(struct metaBlock *mBfind, size_t size)
+{
+    splitSpace(&mBfind, size); // improvement : split when free space
+    mBfind->status = 0; // too big
+    void *interPtr = mBfind;
+    char *tmpPtr = interPtr;
+    return tmpPtr + sizeof(struct metaBlock);
+}
+
 __attribute__((visibility("default"))) void *malloc(size_t size)
 {
     size = align16(size);
@@ -209,15 +218,6 @@ __attribute__((visibility("default"))) void *malloc(size_t size)
     }
 }
 
-char *foundMem(struct metaBlock *mBfind, size_t size)
-{
-    splitSpace(&mBfind, size); // improvement : split when free space
-    mBfind->status = 0; // too big
-    void *interPtr = mBfind;
-    char *tmpPtr = interPtr;
-    return tmpPtr + sizeof(struct metaBlock);
-}
-
 /*
 #include <stdio.h>
 
@@ -232,8 +232,8 @@ __attribute__((visibility("default"))) void print(void)
                 mB->blockSize);
         mB = mB->next;
     }
-}
-*/
+}*/
+
 void mergeFree(struct metaBlock *mB)
 {
     if (mB->next && mB->next->status && !mB->next->newPage)
@@ -324,6 +324,17 @@ __attribute__((visibility("default"))) void free(void *ptr)
 
 __attribute__((visibility("default"))) void *realloc(void *ptr, size_t size)
 {
+    if (!ptr || !size)
+    {
+        return NULL;
+    }
+    return NULL;
+    /*
+    if (!size)
+    {
+        free(ptr);
+        return NULL;
+    }
     if (!ptr)
     {
         return malloc(size);
@@ -332,7 +343,15 @@ __attribute__((visibility("default"))) void *realloc(void *ptr, size_t size)
     tmpPtr -= sizeof(struct metaBlock);
     void *interPtr = tmpPtr;
     struct metaBlock *oldMeta = interPtr;
+    if (oldMeta->blockSize >= size)
+    {
+        return ptr;
+    }
     void *newAl = malloc(size);
+    if (!newAl)
+    {
+        return NULL;
+    }
     tmpPtr = newAl;
     tmpPtr -= sizeof(struct metaBlock);
     interPtr = tmpPtr;
@@ -347,6 +366,7 @@ __attribute__((visibility("default"))) void *realloc(void *ptr, size_t size)
     }
     free(ptr);
     return newAl;
+    */
 }
 
 __attribute__((visibility("default"))) void *calloc(size_t nmemb, size_t size)

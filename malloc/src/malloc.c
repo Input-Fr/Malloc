@@ -1,9 +1,11 @@
 #define _GNU_SOURCE
 
+#include <err.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/mman.h>
-#include <err.h>
+
 #include "align.h"
 
 struct block
@@ -120,7 +122,7 @@ static void reallocBlock(size_t size, struct metaBlock **traveler)
     }
     b.curBlockSize += newSize;
     b.remainingSize += (newSize - size - sizeof(struct metaBlock));
-    
+
     struct metaBlock *mousse = b.ptrToPage;
     while (mousse->next)
     {
@@ -134,7 +136,6 @@ static void reallocBlock(size_t size, struct metaBlock **traveler)
     mB->next = NULL;
     mB->prev = *traveler;
     (*traveler)->next = mB;
-
 }
 
 size_t align16(size_t size)
@@ -155,8 +156,7 @@ size_t align16(size_t size)
     }
 }
 
-
-__attribute__((visibility("default"))) void *my_malloc(size_t size)
+__attribute__((visibility("default"))) void *malloc(size_t size)
 {
     size = align16(size);
     if (PTRDIFF_MAX < size)
@@ -204,27 +204,32 @@ __attribute__((visibility("default"))) void *my_malloc(size_t size)
         }
         else // one large enough memory was found
         {
-            splitSpace(&mBfind,
-                       size); // improvement : split when free space too big
-            mBfind->status = 0;
-            void *interPtr = mBfind;
-            char *tmpPtr = interPtr;
-            return tmpPtr + sizeof(struct metaBlock);
+            return foundMem(mBfind, size);
         }
     }
 }
+
+char *foundMem(struct metaBlock *mBfind, size_t size)
+{
+    splitSpace(&mBfind, size); // improvement : split when free space
+    mBfind->status = 0; // too big
+    void *interPtr = mBfind;
+    char *tmpPtr = interPtr;
+    return tmpPtr + sizeof(struct metaBlock);
+}
+
 /*
 #include <stdio.h>
 
 __attribute__((visibility("default"))) void print(void)
 {
     printf("MAIN BLOCK : b.curBlockSize = %zu\n b.remainingSize = %zu\n",
-            b.curBlockSize, b.remainingSize); 
-    struct metaBlock *mB = b.ptrToPage; 
+            b.curBlockSize, b.remainingSize);
+    struct metaBlock *mB = b.ptrToPage;
     while (mB)
     {
         printf("META BLOCK : status = %d\n blockSize = %zu\n\n", mB->status,
-                mB->blockSize); 
+                mB->blockSize);
         mB = mB->next;
     }
 }
@@ -301,7 +306,7 @@ static void unallocAll(void)
     }
 }
 
-__attribute__((visibility("default"))) void my_free(void *ptr)
+__attribute__((visibility("default"))) void free(void *ptr)
 {
     if (!ptr)
     {
@@ -317,12 +322,34 @@ __attribute__((visibility("default"))) void my_free(void *ptr)
     unallocAll();
 }
 
-__attribute__((visibility("default"))) void *my_realloc(void *ptr, size_t size)
+__attribute__((visibility("default"))) void *realloc(void *ptr, size_t size)
 {
-    return ptr || size ? NULL : NULL;
+    if (!ptr)
+    {
+        return malloc(size);
+    }
+    char *tmpPtr = ptr;
+    tmpPtr -= sizeof(struct metaBlock);
+    void *interPtr = tmpPtr;
+    struct metaBlock *oldMeta = interPtr;
+    void *newAl = malloc(size);
+    tmpPtr = newAl;
+    tmpPtr -= sizeof(struct metaBlock);
+    interPtr = tmpPtr;
+    struct metaBlock *newMeta = interPtr;
+    if (oldMeta->blockSize > newMeta->blockSize)
+    {
+        memcpy(newAl, ptr, size);
+    }
+    else
+    {
+        memcpy(newAl, ptr, oldMeta->blockSize);
+    }
+    free(ptr);
+    return newAl;
 }
 
-__attribute__((visibility("default"))) void *my_calloc(size_t nmemb, size_t size)
+__attribute__((visibility("default"))) void *calloc(size_t nmemb, size_t size)
 {
     if (__builtin_mul_overflow(nmemb, size, &size))
     {
@@ -330,7 +357,9 @@ __attribute__((visibility("default"))) void *my_calloc(size_t nmemb, size_t size
     }
     if (!size || !nmemb)
     {
-        return my_malloc(0);
+        return malloc(0);
     }
-    return nmemb || size ? NULL : NULL;
+    void *mem = malloc(nmemb * size);
+    memset(mem, 0, nmemb * size);
+    return mem;
 }

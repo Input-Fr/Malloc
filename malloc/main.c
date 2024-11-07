@@ -19,7 +19,14 @@ int main(void)
     my_free(i);
     my_free(j);
     print();
-    my_malloc(4096);
+    
+    void *p = my_malloc(4096);
+
+    my_free(p);
+  
+    print();
+    //my_free(str1);
+    my_free(str);
     //print();
     return 0;
 }

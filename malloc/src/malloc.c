@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/mman.h>
-
+#include <err.h>
 #include "align.h"
 
 struct block
@@ -16,6 +16,7 @@ struct block
 struct metaBlock
 {
     unsigned int status : 1; // 1-bit field : 0 = used, 1 = free
+    unsigned int newPage : 1; // 1-bit field : 0 = inPage, 1 = atBeginingOfPage
     size_t blockSize;
     struct metaBlock *next;
     struct metaBlock *prev;
@@ -60,6 +61,7 @@ static char *newMetaBlock(struct metaBlock *traveler, size_t size)
     interPtr = tmpPtr;
     struct metaBlock *mB = interPtr;
     mB->status = 0;
+    mB->newPage = 0;
     mB->blockSize = size;
     mB->next = NULL;
     mB->prev = traveler;
@@ -74,6 +76,7 @@ static char *createFirstBlock(void *addr, size_t alignedSize, size_t size)
     b.remainingSize = alignedSize - (size + sizeof(struct metaBlock));
     struct metaBlock *mB = b.ptrToPage;
     mB->status = 0; // used
+    mB->newPage = 1; // begining of the newPage
     mB->blockSize = size;
     void *interPtr = mB; // cast to void so we can cast to char
     char *tmpPtr = interPtr; // cast to char so we can increment
@@ -93,6 +96,7 @@ static void splitSpace(struct metaBlock **mB, size_t size)
         interPtr = beginNewPtr;
         struct metaBlock *nmB = interPtr;
         nmB->status = 1;
+        nmB->newPage = 0;
         nmB->blockSize = (*mB)->blockSize - (size + sizeof(struct metaBlock));
         nmB->next = (*mB)->next;
         nmB->prev = (*mB);
@@ -105,16 +109,56 @@ static void splitSpace(struct metaBlock **mB, size_t size)
     }
 }
 
-static void reallocBlock(size_t size)
+static void reallocBlock(size_t size, struct metaBlock **traveler)
 {
-    size_t newSize = align(b.curBlockSize + size + sizeof(struct metaBlock));
-    b.remainingSize += (newSize - b.curBlockSize);
-    b.ptrToPage = mremap(b.ptrToPage, b.curBlockSize, newSize, MREMAP_MAYMOVE);
-    b.curBlockSize = newSize;
+    size_t newSize = align(size + sizeof(struct metaBlock));
+    void *ptrToPage = mmap(NULL, newSize, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ptrToPage == MAP_FAILED)
+    {
+        return;
+    }
+    b.curBlockSize += newSize;
+    b.remainingSize += (newSize - size - sizeof(struct metaBlock));
+    
+    struct metaBlock *mousse = b.ptrToPage;
+    while (mousse->next)
+    {
+        mousse = mousse->next;
+    }
+    *traveler = mousse;
+    struct metaBlock *mB = ptrToPage;
+    mB->status = 0;
+    mB->newPage = 1;
+    mB->blockSize = size;
+    mB->next = NULL;
+    mB->prev = *traveler;
+    (*traveler)->next = mB;
+
 }
 
-__attribute__((visibility("default"))) void *malloc(size_t size)
+size_t align16(size_t size)
 {
+    size_t reste = (size % sizeof(long double));
+    if (!reste)
+    {
+        return size;
+    }
+    size_t ret;
+    if (__builtin_add_overflow(size, sizeof(long double) - reste, &ret))
+    {
+        return 0;
+    }
+    else
+    {
+        return ret;
+    }
+}
+
+
+__attribute__((visibility("default"))) void *my_malloc(size_t size)
+{
+    size = align16(size);
     if (PTRDIFF_MAX < size)
     {
         return NULL;
@@ -144,11 +188,15 @@ __attribute__((visibility("default"))) void *malloc(size_t size)
         {
             if (b.remainingSize < size + sizeof(struct metaBlock))
             { // if not enough space, "realloc"
-                reallocBlock(size);
-                if (b.ptrToPage == MAP_FAILED)
+                reallocBlock(size, &traveler);
+                if (traveler->next == NULL)
                 {
                     return NULL;
                 }
+                void *p = traveler->next;
+                char *tmpPtr = p;
+                tmpPtr += sizeof(struct metaBlock);
+                return tmpPtr;
             }
             b.remainingSize -= (size + sizeof(struct metaBlock));
             char *tmpPtr = newMetaBlock(traveler, size);
@@ -171,17 +219,19 @@ __attribute__((visibility("default"))) void *malloc(size_t size)
 __attribute__((visibility("default"))) void print(void)
 {
     printf("MAIN BLOCK : b.curBlockSize = %zu\n b.remainingSize = %zu\n",
-b.curBlockSize, b.remainingSize); struct metaBlock *mB = b.ptrToPage; while (mB)
+            b.curBlockSize, b.remainingSize); 
+    struct metaBlock *mB = b.ptrToPage; 
+    while (mB)
     {
         printf("META BLOCK : status = %d\n blockSize = %zu\n\n", mB->status,
-mB->blockSize); mB = mB->next;
+                mB->blockSize); 
+        mB = mB->next;
     }
-
 }
 */
 void mergeFree(struct metaBlock *mB)
 {
-    if (mB->next && mB->next->status)
+    if (mB->next && mB->next->status && !mB->next->newPage)
     {
         mB->blockSize += mB->next->blockSize + sizeof(struct metaBlock);
         if (mB->next->next)
@@ -190,7 +240,7 @@ void mergeFree(struct metaBlock *mB)
         }
         mB->next = mB->next->next;
     }
-    if (mB->prev && mB->prev->status)
+    if (mB->prev && mB->prev->status && !mB->newPage)
     {
         struct metaBlock *mBn = mB->prev;
         mBn->blockSize += mBn->next->blockSize + sizeof(struct metaBlock);
@@ -202,7 +252,56 @@ void mergeFree(struct metaBlock *mB)
     }
 }
 
-__attribute__((visibility("default"))) void free(void *ptr)
+static void unallocAll(void)
+{
+    struct metaBlock *traveler = b.ptrToPage;
+    struct metaBlock *next = NULL;
+    int up = 0;
+    while (traveler)
+    {
+        if (traveler->newPage && traveler->status) // free and page begining
+        {
+            if (!traveler->next || (traveler->next && traveler->next->newPage))
+            {
+                if (!traveler->prev) // if firstBlock, redirect block pointer
+                {
+                    b.ptrToPage = traveler->next;
+                }
+                if (traveler->prev) // update next
+                {
+                    traveler->prev->next = traveler->next;
+                }
+                if (traveler->next) // update prev
+                {
+                    traveler->next->prev = traveler->prev;
+                }
+                size_t totSz = traveler->blockSize + sizeof(struct metaBlock);
+                size_t curPageSize = align(totSz);
+                b.curBlockSize -= curPageSize;
+                b.remainingSize -= (curPageSize - totSz);
+                next = traveler->next;
+                up = 1;
+                munmap(traveler, curPageSize);
+            }
+        }
+        if (up)
+        {
+            traveler = next;
+            up = 0;
+        }
+        else
+        {
+            traveler = traveler->next;
+        }
+    }
+    if (b.ptrToPage == NULL)
+    {
+        b.remainingSize = 0;
+        b.curBlockSize = 0;
+    }
+}
+
+__attribute__((visibility("default"))) void my_free(void *ptr)
 {
     if (!ptr)
     {
@@ -215,22 +314,23 @@ __attribute__((visibility("default"))) void free(void *ptr)
     struct metaBlock *mB = interPtr;
     mB->status = 1;
     mergeFree(mB); // improvement : merge if two neighbors are free
-    struct metaBlock *checkEmpty = b.ptrToPage;
-    if (!checkEmpty->next) // no more allocated memory
-    {
-        munmap(b.ptrToPage, b.curBlockSize);
-        b.ptrToPage = NULL;
-        b.curBlockSize = 0;
-        b.remainingSize = 0;
-    }
+    unallocAll();
 }
 
-__attribute__((visibility("default"))) void *realloc(void *ptr, size_t size)
+__attribute__((visibility("default"))) void *my_realloc(void *ptr, size_t size)
 {
     return ptr || size ? NULL : NULL;
 }
 
-__attribute__((visibility("default"))) void *calloc(size_t nmemb, size_t size)
+__attribute__((visibility("default"))) void *my_calloc(size_t nmemb, size_t size)
 {
+    if (__builtin_mul_overflow(nmemb, size, &size))
+    {
+        return NULL;
+    }
+    if (!size || !nmemb)
+    {
+        return my_malloc(0);
+    }
     return nmemb || size ? NULL : NULL;
 }

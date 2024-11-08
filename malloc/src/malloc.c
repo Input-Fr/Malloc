@@ -24,18 +24,6 @@ struct metaBlock
 
 struct block b = { .curBlockSize = 0, .remainingSize = 0, .ptrToPage = NULL };
 
-static void stockHere(struct meta *blk, size_t wSize)
-{
-    size_t usedSize = blk->blockSize + sizeof(struct metaBlock);
-    while (!blk->newPage)
-    {
-        blk = blk->prev;
-        usedSize += blk->blockSize + sizeof(struct metaBlock);
-    }
-    size_t chunkSize = align(usedSize);
-    return (chunkSize - usedSize) > (wSize + sizeof(struct metaBlock));
-}
-
 static struct metaBlock *findMemSpace(size_t wSize, struct metaBlock **traveler)
 {
     struct metaBlock *wantedBlock = NULL;
@@ -43,10 +31,6 @@ static struct metaBlock *findMemSpace(size_t wSize, struct metaBlock **traveler)
     curSize--;
     while ((*traveler)->next)
     {
-        if ((*traveler)->next->newPage && stockHere(*traveler, wSize))
-        {
-            return NULL;
-        }
         if ((*traveler)->status)
         {
             if ((*traveler)->blockSize >= wSize)
@@ -197,20 +181,7 @@ static int isNotEnough(size_t sizeToAdd)
     return remainSz < sizeToAdd;
 }
 
-static void allocMem(struct metaBlock *traveler, size_t wSize)
-{
-    void *mem = traveler;
-    char *newPos = mem;
-    newPos += traveler->blockSize + sizeof(struct metaBlock);
-    b.remainingSize -= sizeof(struct metaBlock) + wSize;
-    void *interPtr = newPos;
-    struct metaBlock *mB = interPtr;
-    mB->prev = traveler;
-    mb->next = traveler->next;
-    traveler->next = mB;
-}
-
-__attribute__((visibility("default"))) void *my_malloc(size_t size)
+__attribute__((visibility("default"))) void *malloc(size_t size)
 {
     size = align16(size);
     if (PTRDIFF_MAX < size)
@@ -240,10 +211,6 @@ __attribute__((visibility("default"))) void *my_malloc(size_t size)
         struct metaBlock *mBfind = findMemSpace(size, &traveler);
         if (!mBfind) // no free, create new one
         {
-            if (traveler->next)
-            {
-                allocMem(traveler);
-            }
             if (isNotEnough(size + sizeof(struct metaBlock)))
             { // if not enough space, "realloc"
                 reallocBlock(size, &traveler);
@@ -264,22 +231,6 @@ __attribute__((visibility("default"))) void *my_malloc(size_t size)
         {
             return foundMem(mBfind, size);
         }
-    }
-}
-
-
-#include <stdio.h>
-
-__attribute__((visibility("default"))) void print(void)
-{
-    printf("MAIN BLOCK : b.curBlockSize = %zu\n b.remainingSize = %zu\n",
-            b.curBlockSize, b.remainingSize);
-    struct metaBlock *mB = b.ptrToPage;
-    while (mB)
-    {
-        printf("META BLOCK : status = %d\n blockSize = %zu\n newPage = %d\n\n", mB->status,
-                mB->blockSize, mB->newPage);
-        mB = mB->next;
     }
 }
 
@@ -358,7 +309,7 @@ static void unallocAll(void)
     }
 }
 
-__attribute__((visibility("default"))) void my_free(void *ptr)
+__attribute__((visibility("default"))) void free(void *ptr)
 {
     if (!ptr)
     {
@@ -374,16 +325,16 @@ __attribute__((visibility("default"))) void my_free(void *ptr)
     unallocAll();
 }
 
-__attribute__((visibility("default"))) void *my_realloc(void *ptr, size_t size)
+__attribute__((visibility("default"))) void *realloc(void *ptr, size_t size)
 {
     if (!size)
     {
-        my_free(ptr);
+        free(ptr);
         return NULL;
     }
     if (!ptr)
     {
-        return my_malloc(size);
+        return malloc(size);
     }
     char *tmpPtr = ptr;
     tmpPtr -= sizeof(struct metaBlock);
@@ -393,7 +344,7 @@ __attribute__((visibility("default"))) void *my_realloc(void *ptr, size_t size)
     {
         return ptr;
     }
-    void *newAl = my_malloc(size);
+    void *newAl = malloc(size);
     if (!newAl)
     {
         return NULL;
@@ -410,11 +361,11 @@ __attribute__((visibility("default"))) void *my_realloc(void *ptr, size_t size)
     {
         memcpy(newAl, ptr, oldMeta->blockSize);
     }
-    my_free(ptr);
+    free(ptr);
     return newAl;
 }
 
-__attribute__((visibility("default"))) void *my_calloc(size_t nmemb, size_t size)
+__attribute__((visibility("default"))) void *calloc(size_t nmemb, size_t size)
 {
     if (__builtin_mul_overflow(nmemb, size, &size))
     {
@@ -422,28 +373,13 @@ __attribute__((visibility("default"))) void *my_calloc(size_t nmemb, size_t size
     }
     if (!size || !nmemb)
     {
-        return my_malloc(0);
+        return malloc(0);
     }
-    void *mem = my_malloc(nmemb * size);
+    void *mem = malloc(nmemb * size);
     if (!mem)
     {
         return mem;
     }
     memset(mem, 0, nmemb * size);
     return mem;
-}
-
-int main(void)
-{
-    void *pp = my_malloc(2048);
-    void *p1 = my_realloc(NULL, 2048);
-    void *p2 = my_realloc(NULL, 2048);
-    void *p4 = my_realloc(NULL, 1024);
-    void *p3 = my_realloc(NULL, 1024);
-    print();
-    my_free(pp);
-    my_free(p2);
-    my_free(p3);
-    my_free(p4);
-    return 0;
 }

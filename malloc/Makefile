@@ -18,6 +18,9 @@ $(TARGET_LIB): $(OBJS)
 debug: CFLAGS += -g
 debug: clean $(TARGET_LIB)
 
+check:
+	./tests/test.sh
+
 clean:
 	$(RM) $(TARGET_LIB) $(OBJS)
 

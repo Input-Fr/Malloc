@@ -24,6 +24,18 @@ struct metaBlock
 
 struct block b = { .curBlockSize = 0, .remainingSize = 0, .ptrToPage = NULL };
 
+static void stockHere(struct meta *blk, size_t wSize)
+{
+    size_t usedSize = blk->blockSize + sizeof(struct metaBlock);
+    while (!blk->newPage)
+    {
+        blk = blk->prev;
+        usedSize += blk->blockSize + sizeof(struct metaBlock);
+    }
+    size_t chunkSize = align(usedSize);
+    return (chunkSize - usedSize) > (wSize + sizeof(struct metaBlock));
+}
+
 static struct metaBlock *findMemSpace(size_t wSize, struct metaBlock **traveler)
 {
     struct metaBlock *wantedBlock = NULL;
@@ -31,6 +43,10 @@ static struct metaBlock *findMemSpace(size_t wSize, struct metaBlock **traveler)
     curSize--;
     while ((*traveler)->next)
     {
+        if ((*traveler)->next->newPage && stockHere(*traveler, wSize))
+        {
+            return NULL;
+        }
         if ((*traveler)->status)
         {
             if ((*traveler)->blockSize >= wSize)
@@ -181,6 +197,19 @@ static int isNotEnough(size_t sizeToAdd)
     return remainSz < sizeToAdd;
 }
 
+static void allocMem(struct metaBlock *traveler, size_t wSize)
+{
+    void *mem = traveler;
+    char *newPos = mem;
+    newPos += traveler->blockSize + sizeof(struct metaBlock);
+    b.remainingSize -= sizeof(struct metaBlock) + wSize;
+    void *interPtr = newPos;
+    struct metaBlock *mB = interPtr;
+    mB->prev = traveler;
+    mb->next = traveler->next;
+    traveler->next = mB;
+}
+
 __attribute__((visibility("default"))) void *my_malloc(size_t size)
 {
     size = align16(size);
@@ -211,6 +240,10 @@ __attribute__((visibility("default"))) void *my_malloc(size_t size)
         struct metaBlock *mBfind = findMemSpace(size, &traveler);
         if (!mBfind) // no free, create new one
         {
+            if (traveler->next)
+            {
+                allocMem(traveler);
+            }
             if (isNotEnough(size + sizeof(struct metaBlock)))
             { // if not enough space, "realloc"
                 reallocBlock(size, &traveler);

@@ -24,6 +24,18 @@ struct metaBlock
 
 struct block b = { .curBlockSize = 0, .remainingSize = 0, .ptrToPage = NULL };
 
+static int stockHere(struct metaBlock *blk, size_t wSize)
+{
+    size_t usedSize = blk->blockSize + sizeof(struct metaBlock);
+    while (!blk->newPage)
+    {
+        blk = blk->prev;
+        usedSize += blk->blockSize + sizeof(struct metaBlock);
+    }
+    size_t chunkSize = align(usedSize);
+    return (chunkSize - usedSize) > (wSize + sizeof(struct metaBlock));
+}
+
 static struct metaBlock *findMemSpace(size_t wSize, struct metaBlock **traveler)
 {
     struct metaBlock *wantedBlock = NULL;
@@ -31,6 +43,10 @@ static struct metaBlock *findMemSpace(size_t wSize, struct metaBlock **traveler)
     curSize--;
     while ((*traveler)->next)
     {
+        if ((*traveler)->next->newPage && stockHere(*traveler, wSize))
+        {
+            return NULL;
+        }
         if ((*traveler)->status)
         {
             if ((*traveler)->blockSize >= wSize)
@@ -181,6 +197,36 @@ static int isNotEnough(size_t sizeToAdd)
     return remainSz < sizeToAdd;
 }
 
+static char *allocMem(struct metaBlock *traveler, size_t wSize)
+{
+    void *mem = traveler;
+    char *newPos = mem;
+    newPos += traveler->blockSize + sizeof(struct metaBlock);
+    b.remainingSize -= sizeof(struct metaBlock) + wSize;
+    void *interPtr = newPos;
+    struct metaBlock *mB = interPtr;
+    mB->status = 0;
+    mB->newPage = 0;
+    mB->blockSize = wSize;
+    mB->prev = traveler;
+    mB->next = traveler->next;
+    if (traveler->next)
+    {
+        traveler->next->prev = mB;
+    }
+    traveler->next = mB;
+    void *ptrMb = mB;
+    return ptrMb;
+}
+
+static char *giveMeta(struct metaBlock *traveler)
+{
+    void *p = traveler->next;
+    char *tmpPtr = p;
+    tmpPtr += sizeof(struct metaBlock);
+    return tmpPtr;
+}
+
 __attribute__((visibility("default"))) void *malloc(size_t size)
 {
     size = align16(size);
@@ -211,6 +257,10 @@ __attribute__((visibility("default"))) void *malloc(size_t size)
         struct metaBlock *mBfind = findMemSpace(size, &traveler);
         if (!mBfind) // no free, create new one
         {
+            if (traveler->next)
+            {
+                return allocMem(traveler, size) + sizeof(struct metaBlock);
+            }
             if (isNotEnough(size + sizeof(struct metaBlock)))
             { // if not enough space, "realloc"
                 reallocBlock(size, &traveler);
@@ -218,10 +268,7 @@ __attribute__((visibility("default"))) void *malloc(size_t size)
                 {
                     return NULL;
                 }
-                void *p = traveler->next;
-                char *tmpPtr = p;
-                tmpPtr += sizeof(struct metaBlock);
-                return tmpPtr;
+                return giveMeta(traveler);
             }
             b.remainingSize -= (size + sizeof(struct metaBlock));
             char *tmpPtr = newMetaBlock(traveler, size);
@@ -233,7 +280,22 @@ __attribute__((visibility("default"))) void *malloc(size_t size)
         }
     }
 }
+/*
+#include <stdio.h>
 
+__attribute__((visibility("default"))) void print(void)
+{
+    printf("MAIN BLOCK : b.curBlockSize = %zu\n b.remainingSize = %zu\n",
+           b.curBlockSize, b.remainingSize);
+    struct metaBlock *mB = b.ptrToPage;
+    while (mB)
+    {
+        printf("META BLOCK : status = %d\n blockSize = %zu\n newPage = %d\n\n",
+               mB->status, mB->blockSize, mB->newPage);
+        mB = mB->next;
+    }
+}
+*/
 void mergeFree(struct metaBlock *mB)
 {
     if (mB->next && mB->next->status && !mB->next->newPage)
@@ -383,3 +445,19 @@ __attribute__((visibility("default"))) void *calloc(size_t nmemb, size_t size)
     memset(mem, 0, nmemb * size);
     return mem;
 }
+/*
+int main(void)
+{
+    void *pp = malloc(2048);
+    void *p1 = realloc(pp, 2049);
+    void *p2 = realloc(p1, 4049);
+    void *p4 = realloc(p2, 9049);
+    void *p3 = realloc(NULL, 1024);
+    //print();
+    free(pp);
+    free(p1);
+    free(p2);
+    free(p4);
+    free(p3);
+    return 0;
+}*/

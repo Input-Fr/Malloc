@@ -280,22 +280,7 @@ __attribute__((visibility("default"))) void *malloc(size_t size)
         }
     }
 }
-/*
-#include <stdio.h>
 
-__attribute__((visibility("default"))) void print(void)
-{
-    printf("MAIN BLOCK : b.curBlockSize = %zu\n b.remainingSize = %zu\n",
-           b.curBlockSize, b.remainingSize);
-    struct metaBlock *mB = b.ptrToPage;
-    while (mB)
-    {
-        printf("META BLOCK : status = %d\n blockSize = %zu\n newPage = %d\n\n",
-               mB->status, mB->blockSize, mB->newPage);
-        mB = mB->next;
-    }
-}
-*/
 void mergeFree(struct metaBlock *mB)
 {
     if (mB->next && mB->next->status && !mB->next->newPage)
@@ -350,7 +335,6 @@ static void unallocAll(void)
                 up = 1;
                 void *interPtr = traveler;
                 char *tmpPtr = interPtr;
-                tmpPtr -= sizeof(struct metaBlock);
                 munmap(tmpPtr, curPageSize);
             }
         }
@@ -377,7 +361,28 @@ __attribute__((visibility("default"))) void free(void *ptr)
     {
         return;
     }
-
+    // check if the pointer is in our alloc
+    struct metaBlock *curr = b.ptrToPage;
+    int found = 0;
+    while (curr) {
+        if (curr->newPage) {
+            void *currInter = curr;
+            char *currChr = currInter;
+            char *pageStart = currChr;
+            size_t pageSize = align(curr->blockSize + sizeof(struct metaBlock));
+            char *pageEnd = pageStart + pageSize;
+            char *ptrChr = ptr;
+            if (ptrChr >= pageStart && ptrChr < pageEnd) {
+                found = 1;
+                break;
+            }
+        }
+        curr = curr->next;
+    }
+    
+    if (!found)
+        return;  // Not our pointer, ignore it
+    
     char *tmpPtr = ptr;
     tmpPtr -= sizeof(struct metaBlock);
     void *interPtr = tmpPtr;
@@ -445,19 +450,3 @@ __attribute__((visibility("default"))) void *calloc(size_t nmemb, size_t size)
     memset(mem, 0, nmemb * size);
     return mem;
 }
-/*
-int main(void)
-{
-    void *pp = malloc(2048);
-    void *p1 = realloc(pp, 2049);
-    void *p2 = realloc(p1, 4049);
-    void *p4 = realloc(p2, 9049);
-    void *p3 = realloc(NULL, 1024);
-    //print();
-    free(pp);
-    free(p1);
-    free(p2);
-    free(p4);
-    free(p3);
-    return 0;
-}*/

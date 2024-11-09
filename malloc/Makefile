@@ -1,6 +1,6 @@
 CC = gcc
 CPPFLAGS = -D_DEFAULT_SOURCE
-CFLAGS = -Wall -Wextra -Werror -std=c99 -Wvla -Isrc/include -g
+CFLAGS = -Wall -Wextra -Werror -std=c99 -Wvla -Isrc/include
 LDFLAGS = -shared
 VPATH = src
 

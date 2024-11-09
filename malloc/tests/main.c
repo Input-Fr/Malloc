@@ -8,5 +8,5 @@ void *my_calloc(size_t nmemb, size_t size);
 
 int main(void)
 {
-
+    return 0;
 }

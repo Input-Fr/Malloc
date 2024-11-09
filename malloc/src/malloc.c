@@ -364,25 +364,28 @@ __attribute__((visibility("default"))) void free(void *ptr)
     // check if the pointer is in our alloc
     struct metaBlock *curr = b.ptrToPage;
     int found = 0;
-    while (curr) {
-        if (curr->newPage) {
+    while (curr)
+    {
+        if (curr->newPage)
+        {
             void *currInter = curr;
             char *currChr = currInter;
             char *pageStart = currChr;
             size_t pageSize = align(curr->blockSize + sizeof(struct metaBlock));
             char *pageEnd = pageStart + pageSize;
             char *ptrChr = ptr;
-            if (ptrChr >= pageStart && ptrChr < pageEnd) {
+            if (ptrChr >= pageStart && ptrChr < pageEnd)
+            {
                 found = 1;
                 break;
             }
         }
         curr = curr->next;
     }
-    
+
     if (!found)
-        return;  // Not our pointer, ignore it
-    
+        return; // Not our pointer, ignore it
+
     char *tmpPtr = ptr;
     tmpPtr -= sizeof(struct metaBlock);
     void *interPtr = tmpPtr;
